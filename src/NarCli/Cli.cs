@@ -29,6 +29,7 @@ internal static class Cli
         打包选项：
           --root=<名称>        归档内根路径；留空则沿用解包清单里的原始路径
           --type=<raw|enc|enc+lz>  未命中清单时的默认存储方式（默认 enc+lz）
+          --threads=<n>       并行压缩线程数（默认=CPU 核心数）
           --no-models          不还原模型的加密状态
           --no-manifest        忽略清单，所有文件用统一的存储方式
 
@@ -187,6 +188,7 @@ internal static class Cli
             RestoreModelEncryption = !Flag(options, "no-models"),
             UseManifest = !Flag(options, "no-manifest"),
             TempDirectory = options.GetValueOrDefault("temp"),
+            Threads = ParseInt(options.GetValueOrDefault("threads"), 0),
         };
 
         Console.WriteLine($"打包 {Path.GetFullPath(packOptions.SourceDirectory)} → {Path.GetFullPath(args[2])}");
@@ -225,7 +227,9 @@ internal static class Cli
     }
 
     private static int ParseInt(string value, int fallback) =>
-        int.TryParse(value, out int parsed) && parsed > 0 ? parsed : fallback == 0 ? Math.Clamp(Environment.ProcessorCount / 2, 2, 8) : fallback;
+        int.TryParse(value, out int parsed) && parsed > 0
+            ? parsed
+            : fallback == 0 ? Math.Clamp(Environment.ProcessorCount, 1, 32) : fallback;
 
     private static NarStoreType ParseStoreType(string value) => (value ?? string.Empty).ToLowerInvariant() switch
     {

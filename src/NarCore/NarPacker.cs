@@ -32,6 +32,20 @@ public sealed class PackOptions
 
     /// <summary>打包时使用的临时目录。为空则使用系统临时目录。</summary>
     public string TempDirectory { get; init; }
+
+    /// <summary>
+    /// 并行压缩线程数。默认按 CPU 核心数自动取值。
+    /// 压缩是打包的主要开销，线程越多越快；受内存上限约束。
+    /// </summary>
+    public int Threads { get; init; } = DefaultThreads;
+
+    /// <summary>
+    /// 并行压缩阶段允许占用的内存上限（MB）。批次大小据此动态收缩，
+    /// 保证在内存较小的机器上也不会 OOM。单条目超过此值时单独成批。
+    /// </summary>
+    public int MemoryBudgetMB { get; init; } = 512;
+
+    private static int DefaultThreads => Math.Clamp(Environment.ProcessorCount, 1, 32);
 }
 
 /// <summary>
@@ -92,7 +106,29 @@ public sealed class NarPacker
                 tempDirectory = Path.Combine(Path.GetTempPath(), "narpack_" + Guid.NewGuid().ToString("N"));
 
             _planned = PlanFor(source, files);
-            foreach (string file in _planned.OrderBy(p => p.DataOrder).ThenBy(p => p.Path, StringComparer.Ordinal).Select(p => p.File))
+
+            // 按数据区顺序遍历，分批并行编码，再按批内顺序落盘
+            var ordered = _planned
+                .OrderBy(p => p.DataOrder)
+                .ThenBy(p => p.Path, StringComparer.Ordinal)
+                .Select(p => new Job
+                {
+                    File = p.File,
+                    Relative = Path.GetRelativePath(source, p.File).Replace(Path.DirectorySeparatorChar, '/'),
+                })
+                .ToList();
+
+            foreach (var job in ordered)
+            {
+                job.Info = new FileInfo(job.File);
+                _manifest?.TryResolve(job.Relative, out job.Known);
+                job.ArchivePath = ResolveArchivePath(job.Relative);
+                job.StoreType = ResolveStoreType(job.File, job.Relative);
+            }
+
+            long budget = Math.Max(32, _options.MemoryBudgetMB) * 1024L * 1024L;
+            int index = 0;
+            while (index < ordered.Count)
             {
                 if (cancellation.IsCancellationRequested)
                 {
@@ -100,12 +136,20 @@ public sealed class NarPacker
                     return summary;
                 }
 
-                string relative = Path.GetRelativePath(source, file).Replace(Path.DirectorySeparatorChar, '/');
-                var result = PackOne(builder, file, relative, tempDirectory);
-                summary.Add(result);
+                // 按预算切批：估算为文件大小（编码后通常更小，估算偏保守是安全的）
+                var batch = new List<Job>();
+                long batchBytes = 0;
+                while (index < ordered.Count)
+                {
+                    var candidate = ordered[index];
+                    long size = candidate.Info.Exists ? candidate.Info.Length : 0;
+                    if (batch.Count > 0 && batchBytes + size > budget) break;
+                    batch.Add(candidate);
+                    batchBytes += size;
+                    index++;
+                }
 
-                int done = Interlocked.Increment(ref _completed);
-                progress?.Report(new ProgressInfo(done, _total, result.Path ?? relative));
+                RunBatch(builder, batch, tempDirectory, summary, progress, cancellation);
             }
 
             if (summary.Failures.Count == 0)
@@ -157,45 +201,118 @@ public sealed class NarPacker
         return byOrder != 0 ? byOrder : string.CompareOrdinal(a.Path, b.Path);
     }
 
-    private EntryResult PackOne(NarBuilder builder, string localPath, string relativePath, string tempDirectory)
+    /// <summary>单个待打包文件的全部前置信息，预先算好以便并行阶段无共享状态。</summary>
+    private sealed class Job
     {
-        string archivePath = relativePath;
+        public string File;
+        public string Relative;
+        public string ArchivePath;
+        public NarStoreType StoreType;
+        public FileInfo Info;
+        public string TempCopy;
+        public NarManifestEntry Known;
+    }
+
+    /// <summary>
+    /// 执行一批：先并行编码（纯 CPU、无共享状态），再按批内顺序提交落盘。
+    /// 打不开的文件直接记为失败并排除出本批，绝不会写成空条目。
+    /// </summary>
+    private void RunBatch(NarBuilder builder, List<Job> batch, string tempDirectory,
+        TaskSummary summary, IProgress<ProgressInfo> progress, CancellationToken cancellation)
+    {
+        var opened = new List<FileStream>(batch.Count);
+        var ready = new List<Job>(batch.Count);
+        var pending = new List<NarBuilder.PendingEntry>(batch.Count);
+
         try
         {
-            var info = new FileInfo(localPath);
-
-            NarManifestEntry known = null;
-            if (_manifest?.TryResolve(relativePath, out known) == true && known != null) ManifestHits++;
-
-            // 路径：清单优先，其次显式 --root，最后用相对路径
-            archivePath = known?.Path
-                          ?? BuildArchivePath(relativePath);
-
-            NarStoreType storeType = ResolveStoreType(localPath, known);
-            string source = localPath;
-
-            // 清单说这个模型原本是加密的，就加密回原样
-            if (_options.RestoreModelEncryption && known?.Mdl is 20 or 21 && GameFileCrypt.IsModelPath(localPath))
+            foreach (var job in batch)
             {
-                string copy = Path.Combine(tempDirectory, Guid.NewGuid().ToString("N") + ".mdl");
-                Directory.CreateDirectory(tempDirectory);
-                File.Copy(localPath, copy, overwrite: true);
-                GameFileCrypt.TransformFile(copy, encrypt: true, known.Mdl);
-                source = copy;
+                if (cancellation.IsCancellationRequested) break;
+
+                FileStream stream;
+                try
+                {
+                    stream = OpenContent(job, tempDirectory);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                               or NotSupportedException or ArgumentException)
+                {
+                    summary.Add(EntryResult.Fail(job.ArchivePath, ex.Message));
+                    continue;
+                }
+
+                opened.Add(stream);
+                ready.Add(job);
+                pending.Add(new NarBuilder.PendingEntry
+                {
+                    ArchivePath = job.ArchivePath,
+                    Content = stream,
+                    StoreType = job.StoreType,
+                    LastModified = job.Info.LastWriteTime,
+                });
             }
 
-            using var stream = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
-            var entry = builder.Add(archivePath, stream, storeType, info.LastWriteTime);
-            return EntryResult.Ok(entry.Path, entry.Size);
+            if (pending.Count > 0)
+            {
+                int baseDone = _completed;
+                var inner = progress == null
+                    ? null
+                    : new CallbackProgress(n => progress.Report(
+                        new ProgressInfo(baseDone + n, _total, ready[Math.Min(n, ready.Count) - 1].ArchivePath)));
+
+                builder.AddRange(pending, _options.Threads, inner, cancellation);
+
+                foreach (var job in ready)
+                    summary.Add(EntryResult.Ok(job.ArchivePath, job.Info.Length));
+                _completed = baseDone + ready.Count;
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        finally
         {
-            return EntryResult.Fail(archivePath, ex.Message);
+            foreach (var stream in opened)
+            {
+                try { stream.Dispose(); } catch (IOException) { }
+            }
+            foreach (var job in batch)
+            {
+                if (job.TempCopy == null) continue;
+                try { File.Delete(job.TempCopy); } catch (IOException) { }
+            }
         }
     }
 
+    /// <summary>打开条目内容。清单要求加密的模型先复制到临时目录再加密，绝不改动用户源文件。</summary>
+    private FileStream OpenContent(Job job, string tempDirectory)
+    {
+        string source = job.File;
+
+        if (_options.RestoreModelEncryption && job.Known?.Mdl is 20 or 21 && GameFileCrypt.IsModelPath(job.File))
+        {
+            Directory.CreateDirectory(tempDirectory);
+            string copy = Path.Combine(tempDirectory, Guid.NewGuid().ToString("N") + ".mdl");
+            File.Copy(job.File, copy, overwrite: true);
+            GameFileCrypt.TransformFile(copy, encrypt: true, job.Known.Mdl);
+            job.TempCopy = copy;
+            source = copy;
+        }
+
+        return new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
+    }
+
+    /// <summary>按清单或 --root 决定归档内路径。</summary>
+    private string ResolveArchivePath(string relative)
+    {
+        if (_manifest != null && _manifest.TryResolve(relative, out var known) && known != null)
+        {
+            ManifestHits++;
+            return known.Path;
+        }
+        return BuildArchivePath(relative);
+    }
+
     /// <summary>存储方式优先级：显式扩展名规则 &gt; 清单记录 &gt; 默认值。</summary>
-    private NarStoreType ResolveStoreType(string localPath, NarManifestEntry known)
+    private NarStoreType ResolveStoreType(string localPath, string relative)
     {
         string extension = Path.GetExtension(localPath);
         if (_options.StoreTypeOverrides != null && !string.IsNullOrEmpty(extension)
@@ -204,8 +321,11 @@ public sealed class NarPacker
             return overridden;
         }
 
-        if (known != null && Enum.IsDefined(typeof(NarStoreType), known.Store))
+        if (_manifest != null && _manifest.TryResolve(relative, out var known) && known != null
+            && Enum.IsDefined(typeof(NarStoreType), known.Store))
+        {
             return (NarStoreType)known.Store;
+        }
 
         return _options.StoreType;
     }
@@ -215,6 +335,14 @@ public sealed class NarPacker
         if (string.IsNullOrWhiteSpace(_options.ArchiveRoot))
             return NarBuilder.NormalizePath(relativePath);
         return NarBuilder.NormalizePath(_options.ArchiveRoot.Trim('/') + "/" + relativePath);
+    }
+
+    /// <summary>把进度回调包装成"本批已完成数"，供 AddRange 使用。</summary>
+    private sealed class CallbackProgress : IProgress<ProgressInfo>
+    {
+        private readonly Action<int> _handler;
+        public CallbackProgress(Action<int> handler) => _handler = handler;
+        public void Report(ProgressInfo value) => _handler(value.Current);
     }
 
     /// <summary>递归枚举文件，跳过清单文件自身。</summary>

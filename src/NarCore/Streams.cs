@@ -92,11 +92,69 @@ public sealed class RegionStream : Stream
     public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }
 
+/// <summary>16 字节循环异或的共享实现，供读流与写流复用。</summary>
+internal static class KeyXor
+{
+    internal static readonly int VectorWidth = System.Numerics.Vector<byte>.Count;
+
+    /// <summary>把 16 字节密钥铺到一个向量宽度上。</summary>
+    internal static System.Numerics.Vector<byte> BuildVector(byte[] key)
+    {
+        var wide = new byte[VectorWidth];
+        for (int i = 0; i < VectorWidth; i++) wide[i] = key[i & 15];
+        return System.Runtime.InteropServices.MemoryMarshal
+            .Cast<byte, System.Numerics.Vector<byte>>(wide.AsSpan())[0];
+    }
+
+    /// <summary>
+    /// 就地异或。keyOffset 为 buffer[0] 对应的密钥相位（0..15）。
+    /// 先标量推进到 16 字节对齐，再向量批量处理，最后标量收尾。
+    /// </summary>
+    internal static void Apply(Span<byte> buffer, byte[] key, int keyOffset, System.Numerics.Vector<byte> keyVector)
+    {
+        int len = buffer.Length;
+        if (len == 0) return;
+
+        int start = keyOffset & 15;
+        int i = 0;
+
+        // 1) 标量推进到 16 字节对齐，使后续可用固定向量
+        if (start != 0)
+        {
+            int head = Math.Min(len, 16 - start);
+            for (int k = 0; k < head; k++)
+                buffer[k] ^= key[(start + k) & 15];
+            i = head;
+        }
+
+        // 2) 向量主体：此时 (start + i) 已是 16 的倍数，向量宽度也是 16 的倍数，
+        //    因此整段可直接套用同一份铺满密钥的向量
+        if (VectorWidth % 16 == 0)
+        {
+            int bulk = (len - i) / VectorWidth * VectorWidth;
+            if (bulk > 0)
+            {
+                var vecs = System.Runtime.InteropServices.MemoryMarshal
+                    .Cast<byte, System.Numerics.Vector<byte>>(buffer.Slice(i, bulk));
+                for (int v = 0; v < vecs.Length; v++)
+                    vecs[v] = System.Numerics.Vector.Xor(vecs[v], keyVector);
+                i += bulk;
+            }
+        }
+
+        // 3) 标量收尾。密钥相位始终相对整段起点计算，
+        //    不能用重置后的局部相位，否则分段读取时后续块会错位
+        for (; i < len; i++)
+            buffer[i] ^= key[(start + i) & 15];
+    }
+}
+
 /// <summary>按条目密钥做 16 字节循环异或的只读流。编码与解码是同一操作。</summary>
 public sealed class XorKeyStream : Stream
 {
     private readonly Stream _base;
     private readonly byte[] _key;
+    private readonly System.Numerics.Vector<byte> _keyVector;
     private long _position;
 
     public XorKeyStream(Stream baseStream, byte[] key)
@@ -106,6 +164,7 @@ public sealed class XorKeyStream : Stream
         if (key.Length != 16) throw new ArgumentException("密钥必须为 16 字节。", nameof(key));
         _base = baseStream;
         _key = key;
+        _keyVector = KeyXor.BuildVector(key);
     }
 
     public override bool CanRead => true;
@@ -124,8 +183,9 @@ public sealed class XorKeyStream : Stream
     public override int Read(Span<byte> buffer)
     {
         int read = _base.Read(buffer);
-        for (int i = 0; i < read; i++)
-            buffer[i] ^= _key[(int)((_position + i) & 0xF)];
+        if (read <= 0) return read;
+
+        KeyXor.Apply(buffer.Slice(0, read), _key, (int)(_position & 0xF), _keyVector);
         _position += read;
         return read;
     }
@@ -164,7 +224,9 @@ public sealed class XorWriteStream : Stream
 {
     private readonly Stream _base;
     private readonly byte[] _key;
+    private readonly System.Numerics.Vector<byte> _keyVector;
     private readonly Crc32 _crc = new();
+    private byte[] _scratch = new byte[64 * 1024];
     private long _position;
 
     public XorWriteStream(Stream baseStream, byte[] key)
@@ -174,6 +236,7 @@ public sealed class XorWriteStream : Stream
         if (key.Length != 16) throw new ArgumentException("密钥必须为 16 字节。", nameof(key));
         _base = baseStream;
         _key = key;
+        _keyVector = KeyXor.BuildVector(key);
     }
 
     public uint Checksum => _crc.Value;
@@ -189,14 +252,17 @@ public sealed class XorWriteStream : Stream
     public override void Write(ReadOnlySpan<byte> buffer)
     {
         if (buffer.Length == 0) return;
-        byte[] scratch = new byte[buffer.Length];
-        buffer.CopyTo(scratch);
-        for (int i = 0; i < scratch.Length; i++)
-            scratch[i] ^= _key[(int)((_position + i) & 0xF)];
 
-        _crc.Update(scratch);
-        _base.Write(scratch, 0, scratch.Length);
-        _position += scratch.Length;
+        // 复用一块临时缓冲，避免每次 Write 都分配
+        if (_scratch.Length < buffer.Length) _scratch = new byte[Math.Max(buffer.Length, _scratch.Length * 2)];
+        var work = _scratch.AsSpan(0, buffer.Length);
+        buffer.CopyTo(work);
+
+        KeyXor.Apply(work, _key, (int)(_position & 0xF), _keyVector);
+
+        _crc.Update(work);
+        _base.Write(work);
+        _position += work.Length;
     }
 
     public override void Flush() => _base.Flush();

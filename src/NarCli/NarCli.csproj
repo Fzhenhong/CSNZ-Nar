@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>nar</AssemblyName>
+    <RootNamespace>NarTool.Cli</RootNamespace>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Product>CSNZ-Nar解包打包工具</Product>
+    <Company>大宏</Company>
+    <Authors>大宏</Authors>
+    <Description>CSNZ/CSOL NAR 归档解包打包工具</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NarCore\NarCore.csproj" />
+  </ItemGroup>
+
+</Project>

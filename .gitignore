@@ -1,0 +1,22 @@
+# 构建产物
+bin/
+obj/
+发布/
+publish/
+artifacts/
+*.user
+*.suo
+.vs/
+
+# 测试数据（体积过大，不入库）
+*.nar
+!docs/sample.nar
+
+# 系统文件
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# 编辑器
+.idea/
+.vscode/

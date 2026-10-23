@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>CSNZ-Nar</AssemblyName>
+    <RootNamespace>NarTool.Gui</RootNamespace>
+    <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
+    <ApplicationDefaultFont>Microsoft YaHei UI, 9pt</ApplicationDefaultFont>
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Product>CSNZ-Nar解包打包工具</Product>
+    <Company>大宏</Company>
+    <Authors>大宏</Authors>
+    <Description>CSNZ/CSOL NAR 归档解包打包工具</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NarCore\NarCore.csproj" />
+  </ItemGroup>
+
+</Project>

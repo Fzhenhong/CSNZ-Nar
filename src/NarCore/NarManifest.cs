@@ -47,7 +47,6 @@ public sealed class NarManifest
 
     public List<NarManifestEntry> Entries { get; set; } = new();
 
-    private Dictionary<string, NarManifestEntry> _index;
     private readonly object _indexLock = new();
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
@@ -84,7 +83,6 @@ public sealed class NarManifest
             if (!File.Exists(file)) return null;
             var manifest = JsonSerializer.Deserialize<NarManifest>(File.ReadAllText(file), SerializerOptions);
             if (manifest?.Entries == null || manifest.Version != CurrentVersion) return null;
-            manifest._index = null;
             return manifest;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
@@ -109,46 +107,78 @@ public sealed class NarManifest
         return null;
     }
 
-    private Dictionary<string, NarManifestEntry> Index()
+    private Dictionary<string, NarManifestEntry> _byPath;
+    private Dictionary<string, List<NarManifestEntry>> _byFileName;
+
+    /// <summary>
+    /// 建立两级索引：完整相对路径 → 条目，以及文件名 → 候选条目列表。
+    ///
+    /// 后者用于"源目录比归档根更深"的场景：此时本地相对路径是清单路径的后缀，
+    /// 精确匹配会落空。若退化为遍历全部条目，单次查询是 O(n)，
+    /// 上万文件再乘上多次调用就变成 O(n²)，实测要数秒。
+    /// 按文件名建索引后，候选通常只有一两个，查询回到 O(1)。
+    /// </summary>
+    private void BuildIndex()
     {
-        if (_index != null) return _index;
+        if (_byPath != null) return;
         lock (_indexLock)
         {
-            if (_index == null)
+            if (_byPath != null) return;
+
+            var byPath = new Dictionary<string, NarManifestEntry>(StringComparer.OrdinalIgnoreCase);
+            var byName = new Dictionary<string, List<NarManifestEntry>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var entry in Entries)
             {
-                var index = new Dictionary<string, NarManifestEntry>(StringComparer.OrdinalIgnoreCase);
-                foreach (var entry in Entries)
+                if (string.IsNullOrEmpty(entry.Path)) continue;
+
+                string relative = entry.RelativePath;
+                byPath[relative] = entry;
+
+                string name = System.IO.Path.GetFileName(relative);
+                if (name.Length == 0) continue;
+                if (!byName.TryGetValue(name, out var list))
                 {
-                    if (string.IsNullOrEmpty(entry.Path)) continue;
-                    index[entry.RelativePath] = entry;
+                    list = new List<NarManifestEntry>(1);
+                    byName[name] = list;
                 }
-                _index = index;
+                list.Add(entry);
             }
-            return _index;
+
+            _byFileName = byName;
+            _byPath = byPath;
         }
     }
 
     /// <summary>
-    /// 按本地相对路径查找对应条目。先精确匹配；再退化为"以该相对路径结尾"，
-    /// 以兼容把源目录选成归档根子目录的情况。
+    /// 按本地相对路径查找对应条目。先精确匹配；未命中时按文件名缩小候选，
+    /// 再确认候选路径是否以该相对路径结尾，以兼容把源目录选成归档根的子目录。
     /// </summary>
     public bool TryResolve(string relativeLocalPath, out NarManifestEntry entry)
     {
         entry = null;
         if (string.IsNullOrEmpty(relativeLocalPath)) return false;
 
-        string key = relativeLocalPath.Replace('\\', '/').TrimStart('/');
-        if (Index().TryGetValue(key, out entry) && entry != null) return true;
+        BuildIndex();
 
-        string suffix = "/" + key;
-        foreach (var candidate in Entries)
+        string key = relativeLocalPath.Replace('\\', '/').TrimStart('/');
+        if (_byPath.TryGetValue(key, out entry) && entry != null) return true;
+
+        // 只检查同名文件，避免遍历整张表
+        string name = System.IO.Path.GetFileName(key);
+        if (name.Length > 0 && _byFileName.TryGetValue(name, out var candidates))
         {
-            if (candidate.RelativePath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            string suffix = "/" + key;
+            foreach (var candidate in candidates)
             {
-                entry = candidate;
-                return true;
+                if (candidate.RelativePath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    entry = candidate;
+                    return true;
+                }
             }
         }
+
         entry = null;
         return false;
     }

@@ -12,8 +12,8 @@
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
     <ApplicationDefaultFont>Microsoft YaHei UI, 9pt</ApplicationDefaultFont>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
-    <AssemblyVersion>1.1.1.0</AssemblyVersion>
-    <FileVersion>1.1.1.0</FileVersion>
+    <AssemblyVersion>1.1.2.0</AssemblyVersion>
+    <FileVersion>1.1.2.0</FileVersion>
     <Product>CSNZ-Nar解包打包工具</Product>
     <Company>大宏</Company>
     <Authors>大宏</Authors>

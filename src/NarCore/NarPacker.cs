@@ -132,12 +132,23 @@ public sealed class NarPacker
                 })
                 .ToList();
 
+            // 每个文件只做一次清单查询，结果直接存进 Job。
+            // 之前 ArchivePath 与 StoreType 各自又查一遍，相当于三倍开销。
             foreach (var job in ordered)
             {
                 job.Info = new FileInfo(job.File);
                 _manifest?.TryResolve(job.Relative, out job.Known);
-                job.ArchivePath = ResolveArchivePath(job.Relative);
-                job.StoreType = ResolveStoreType(job.File, job.Relative);
+
+                job.ArchivePath = job.Known != null ? job.Known.Path : BuildArchivePath(job.Relative);
+                job.StoreType = ResolveStoreType(job.File, job.Known);
+                if (job.Known != null) ManifestHits++;
+            }
+
+            if (_manifest != null)
+            {
+                _tableOrder = new Dictionary<string, int>(ordered.Count, StringComparer.Ordinal);
+                foreach (var job in ordered)
+                    if (job.Known != null) _tableOrder[job.ArchivePath] = job.Known.Ord;
             }
 
             long budget = Math.Max(32, _options.MemoryBudgetMB) * 1024L * 1024L;
@@ -210,11 +221,21 @@ public sealed class NarPacker
     /// <summary>目录表排序：按清单记录的原始序号，未列出的排在后面。</summary>
     private int CompareByTableOrder(NarEntry a, NarEntry b)
     {
-        int orderA = _manifest.TryResolve(a.Path.TrimStart('/'), out var ea) && ea != null ? ea.Ord : int.MaxValue;
-        int orderB = _manifest.TryResolve(b.Path.TrimStart('/'), out var eb) && eb != null ? eb.Ord : int.MaxValue;
+        int orderA = TableOrderOf(a.Path);
+        int orderB = TableOrderOf(b.Path);
         int byOrder = orderA.CompareTo(orderB);
         return byOrder != 0 ? byOrder : string.CompareOrdinal(a.Path, b.Path);
     }
+
+    /// <summary>归档路径 → 目录表序号。用预建字典避免排序时反复扫描清单。</summary>
+    private int TableOrderOf(string archivePath)
+    {
+        var map = _tableOrder;
+        if (map == null) return int.MaxValue;
+        return map.TryGetValue(archivePath, out int order) ? order : int.MaxValue;
+    }
+
+    private Dictionary<string, int> _tableOrder;
 
     /// <summary>单个待打包文件的全部前置信息，预先算好以便并行阶段无共享状态。</summary>
     private sealed class Job
@@ -342,7 +363,7 @@ public sealed class NarPacker
     }
 
     /// <summary>存储方式优先级：显式扩展名规则 &gt; 清单记录 &gt; 默认值。</summary>
-    private NarStoreType ResolveStoreType(string localPath, string relative)
+    private NarStoreType ResolveStoreType(string localPath, NarManifestEntry known)
     {
         string extension = Path.GetExtension(localPath);
         if (_options.StoreTypeOverrides != null && !string.IsNullOrEmpty(extension)
@@ -351,11 +372,8 @@ public sealed class NarPacker
             return overridden;
         }
 
-        if (_manifest != null && _manifest.TryResolve(relative, out var known) && known != null
-            && Enum.IsDefined(typeof(NarStoreType), known.Store))
-        {
+        if (known != null && Enum.IsDefined(typeof(NarStoreType), known.Store))
             return (NarStoreType)known.Store;
-        }
 
         return _options.StoreType;
     }

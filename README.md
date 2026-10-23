@@ -186,6 +186,11 @@ docs/          使用说明
 因此这类归档重打包后**体积会变小**，整文件 SHA-256 与原文件不同。但已经过原厂库全量
 CRC 校验与逐条内容比对确认：**所有条目的内容与客户端行为完全一致**，可直接替换。
 
+## 更新日志
+
+各版本改动见 [CHANGELOG.md](CHANGELOG.md)；每个 Release 的详细说明见
+[Releases](https://github.com/Fzhenhong/CSNZ-Nar/releases)。
+
 ## 许可
 
 [MIT](LICENSE) © 2026 大宏

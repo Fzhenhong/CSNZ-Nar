@@ -2,16 +2,17 @@
 
 本文件格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [1.1.3] - 2026-10-23
 
-### 文档
+### 文档与发布流程
 
-- 各版本 GitHub Release 正文改为记录实际更新内容，不再只渲染模板
-- 新增 `release-notes/` 目录：每个版本的正文以 `vX.Y.Z.md` 纳入版本管理，
-  打 tag 时由 CI 自动读取作为 Release 正文
+- 新增 `release-notes/vX.Y.Z.md`：每个版本的 Release 正文随代码提交，
+  打 tag 时由 CI 自动读取，不再只渲染一个空模板
+- 各历史 Release（v1.0.0 ~ v1.1.2）正文已补全为实际更新内容
 - README 增加更新日志入口
+- 发布包内附 `CHANGELOG.md` 与 `更新记录.md`
 
-## [1.1.2] - 2026-10-23
+## [1.1.2] - 2026-10-23## [1.1.2] - 2026-10-23
 
 ### 修复
 

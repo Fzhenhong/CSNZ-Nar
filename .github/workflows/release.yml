@@ -65,6 +65,8 @@ jobs:
           Copy-Item artifacts/gui/CSNZ-Nar.exe $pkg/
           Copy-Item artifacts/cli/nar.exe $pkg/
           Copy-Item README.md, LICENSE, CHANGELOG.md $pkg/
+          # 中文名副本，方便直接在资源管理器里看到
+          Copy-Item CHANGELOG.md "$pkg/更新记录.md"
           Copy-Item docs/使用说明.md $pkg/
           Compress-Archive -Path "$pkg/*" -DestinationPath "artifacts/CSNZ-Nar-win-x64.zip" -Force
           Get-ChildItem artifacts -Recurse -File |

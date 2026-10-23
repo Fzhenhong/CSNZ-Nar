@@ -4,10 +4,10 @@
 
 **一体化 NAR 归档解包 / 打包工具 · 流式处理 · 零参数自动还原**
 
-[![Build](https://github.com/fengzhenhong/CSNZ-Nar/actions/workflows/release.yml/badge.svg)](https://github.com/fengzhenhong/CSNZ-Nar/actions/workflows/release.yml)
-[![Release](https://img.shields.io/github/v/release/fengzhenhong/CSNZ-Nar?display_name=tag)](https://github.com/fengzhenhong/CSNZ-Nar/releases)
-[![License](https://img.shields.io/github/license/fengzhenhong/CSNZ-Nar)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%20x64-blue)](https://github.com/fengzhenhong/CSNZ-Nar/releases)
+[![Build](https://github.com/Fzhenhong/CSNZ-Nar/actions/workflows/release.yml/badge.svg)](https://github.com/Fzhenhong/CSNZ-Nar/actions/workflows/release.yml)
+[![Release](https://img.shields.io/github/v/release/Fzhenhong/CSNZ-Nar?display_name=tag)](https://github.com/Fzhenhong/CSNZ-Nar/releases)
+[![License](https://img.shields.io/github/license/Fzhenhong/CSNZ-Nar)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-blue)](https://github.com/Fzhenhong/CSNZ-Nar/releases)
 
 By **大宏**
 
@@ -37,7 +37,7 @@ CSNZ / CSOL 客户端把资源打包在 `.nar` 归档里。旧工具存在两个
 
 ## 快速开始
 
-从 [Releases](https://github.com/fengzhenhong/CSNZ-Nar/releases) 下载 `CSNZ-Nar-win-x64.zip`，解压后：
+从 [Releases](https://github.com/Fzhenhong/CSNZ-Nar/releases) 下载 `CSNZ-Nar-win-x64.zip`，解压后：
 
 | 文件 | 说明 |
 |---|---|
@@ -136,7 +136,7 @@ nar pack 输出目录 新的.nar
 需要 [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)。
 
 ```bat
-git clone https://github.com/fengzhenhong/CSNZ-Nar.git
+git clone https://github.com/Fzhenhong/CSNZ-Nar.git
 cd CSNZ-Nar
 dotnet build CSNZ-Nar.sln -c Release
 ```

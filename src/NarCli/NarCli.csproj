@@ -9,8 +9,8 @@
     <AssemblyName>nar</AssemblyName>
     <RootNamespace>NarTool.Cli</RootNamespace>
     <InvariantGlobalization>false</InvariantGlobalization>
-    <AssemblyVersion>1.1.3.0</AssemblyVersion>
-    <FileVersion>1.1.3.0</FileVersion>
+    <AssemblyVersion>1.1.4.0</AssemblyVersion>
+    <FileVersion>1.1.4.0</FileVersion>
     <Product>CSNZ-Nar解包打包工具</Product>
     <Company>大宏</Company>
     <Authors>大宏</Authors>

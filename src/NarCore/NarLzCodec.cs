@@ -40,7 +40,13 @@ public static class NarLzCodec
     private const int HashSize = 1 << HashBits;
     private const int WindowSize = MaxDistance + BlockSize + MaxMatch;
 
-    /// <summary>把 source 压缩写入 destination，返回写出的字节数。</summary>
+    /// <summary>
+    /// 把 source 压缩写入 destination。
+    /// 返回**读取的原始字节数**（即解压后的长度），而非写出的压缩字节数——
+    /// NAR 目录表里记录的是原始大小，若这里返回压缩长度，
+    /// 归档中的 size 字段会偏小，客户端解包时只能还原出被截断的内容。
+    /// 压缩后的字节数由 <paramref name="destination"/> 自行统计。
+    /// </summary>
     public static long Compress(Stream source, Stream destination)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -81,12 +87,14 @@ public static class NarLzCodec
             return got;
         }
 
+        long consumed = 0;
         int history = 0;
         int loaded = Fill(0);
 
         while (loaded > 0)
         {
             int limit = history + loaded;
+            consumed += loaded;
 
             Array.Fill(head, -1);
             for (int i = history; i < limit; i++) chain[i] = -1;
@@ -200,7 +208,8 @@ public static class NarLzCodec
         }
 
         FlushOut();
-        return written;
+        _ = written;
+        return consumed;
     }
 
     internal static int Hash(byte[] data, int index, int bits)

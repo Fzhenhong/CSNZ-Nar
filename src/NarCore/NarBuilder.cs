@@ -166,6 +166,7 @@ public sealed class NarBuilder : IDisposable
             {
                 // 存储形式是 XOR(LZ(明文))：先压缩，再对压缩结果异或，并对异或后的字节求 CRC
                 using var compressor = new GrowBufferStream();
+                // Compress 返回读取的原始字节数，正好是目录表需要的 size
                 originalSize = NarLzCodec.Compress(content, compressor);
                 XorInto(compressor.Buffer.Span, output, crc, key);
                 break;

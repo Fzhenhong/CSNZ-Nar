@@ -263,6 +263,7 @@ internal sealed class ExtractPanel : UserControl
         };
 
         _shell.ResetProgress();
+        _shell.ReportProgress(new ProgressInfo(0, 1, "正在准备解包..."));
         _runner.Run(
             (progress, token) => new NarExtractor(archive, options).Extract(entries, progress, token),
             summary => OnFinished(summary, entries.Count),

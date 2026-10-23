@@ -45,6 +45,12 @@ public sealed class PackOptions
     /// </summary>
     public int MemoryBudgetMB { get; init; } = 512;
 
+    /// <summary>
+    /// 单批最多同时持有的文件数。批次越大内存利用越充分，但会一次性占用大量文件句柄，
+    /// 在文件极多时造成启动阶段的卡顿。取线程数的若干倍即可让 CPU 保持饱和。
+    /// </summary>
+    public int MaxBatchFiles => Environment.ProcessorCount;
+
     private static int DefaultThreads => Math.Clamp(Environment.ProcessorCount, 1, 32);
 }
 
@@ -88,11 +94,19 @@ public sealed class NarPacker
         if (!Directory.Exists(source))
             throw new DirectoryNotFoundException("输入目录不存在：" + source);
 
+        // 先给 UI 一个即时反馈：后续要枚举目录、读取清单、统计文件，
+        // 这些在超大目录上需要几百毫秒，若没有进度会表现为"点了没反应"。
+        progress?.Report(new ProgressInfo(0, 1, "正在扫描目录..."));
+
         _manifest = _options.UseManifest ? NarManifest.FindNear(source) : null;
+
+        progress?.Report(new ProgressInfo(0, 1, "正在枚举文件..."));
 
         var files = CollectFiles(source).ToList();
         _total = files.Count;
         _completed = 0;
+
+        progress?.Report(new ProgressInfo(0, Math.Max(_total, 1), $"共 {_total} 个文件，准备打包..."));
 
         var summary = new TaskSummary { Total = files.Count };
         using var builder = new NarBuilder(_options.TempDirectory);
@@ -139,7 +153,8 @@ public sealed class NarPacker
                 // 按预算切批：估算为文件大小（编码后通常更小，估算偏保守是安全的）
                 var batch = new List<Job>();
                 long batchBytes = 0;
-                while (index < ordered.Count)
+                int batchLimit = Math.Max(_options.MaxBatchFiles, _options.Threads * 4);
+                while (index < ordered.Count && batch.Count < batchLimit)
                 {
                     var candidate = ordered[index];
                     long size = candidate.Info.Exists ? candidate.Info.Length : 0;
@@ -223,33 +238,48 @@ public sealed class NarPacker
         var opened = new List<FileStream>(batch.Count);
         var ready = new List<Job>(batch.Count);
         var pending = new List<NarBuilder.PendingEntry>(batch.Count);
+        var failures = new (Job Job, string Error)[batch.Count];
+        var streams = new FileStream[batch.Count];
 
         try
         {
-            foreach (var job in batch)
+            // 并行打开本批文件：批次可能上千个，串行打开会在启动时形成明显停顿
+            Parallel.For(0, batch.Count, new ParallelOptions
             {
-                if (cancellation.IsCancellationRequested) break;
-
-                FileStream stream;
+                MaxDegreeOfParallelism = Math.Max(1, _options.Threads),
+                CancellationToken = cancellation,
+            }, i =>
+            {
                 try
                 {
-                    stream = OpenContent(job, tempDirectory);
+                    streams[i] = OpenContent(batch[i], tempDirectory);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                                                or NotSupportedException or ArgumentException)
                 {
-                    summary.Add(EntryResult.Fail(job.ArchivePath, ex.Message));
+                    failures[i] = (batch[i], ex.Message);
+                }
+            });
+
+            // 按原顺序收集成功项，保证落盘顺序稳定
+            for (int i = 0; i < batch.Count; i++)
+            {
+                if (streams[i] == null)
+                {
+                    var (failedJob, error) = failures[i];
+                    summary.Add(EntryResult.Fail(failedJob.ArchivePath, error ?? "无法打开文件。"));
+                    _completed++;
                     continue;
                 }
 
-                opened.Add(stream);
-                ready.Add(job);
+                opened.Add(streams[i]);
+                ready.Add(batch[i]);
                 pending.Add(new NarBuilder.PendingEntry
                 {
-                    ArchivePath = job.ArchivePath,
-                    Content = stream,
-                    StoreType = job.StoreType,
-                    LastModified = job.Info.LastWriteTime,
+                    ArchivePath = batch[i].ArchivePath,
+                    Content = streams[i],
+                    StoreType = batch[i].StoreType,
+                    LastModified = batch[i].Info.LastWriteTime,
                 });
             }
 

@@ -295,7 +295,11 @@ internal sealed class PackPanel : UserControl
             RestoreModelEncryption = _encryptModels.Checked,
         };
 
+        // 立刻给用户反馈：清空进度条并显示"准备中"，
+        // 否则枚举目录/读清单的几百毫秒会表现为"点了没反应"
         _shell.ResetProgress();
+        _shell.ReportProgress(new ProgressInfo(0, 1, "正在准备打包..."));
+
         _runner.Run(
             (progress, token) => new NarPacker(options).Pack(output, progress, token),
             summary => OnFinished(summary, output),

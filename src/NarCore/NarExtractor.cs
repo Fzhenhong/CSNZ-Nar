@@ -63,6 +63,7 @@ public sealed class NarExtractor
     {
         var list = entries.ToList();
         var summary = new TaskSummary { Total = list.Count };
+        progress?.Report(new ProgressInfo(0, Math.Max(list.Count, 1), "正在准备解包..."));
         _total = list.Count;
         _completed = 0;
 
